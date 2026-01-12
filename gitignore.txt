@@ -1,0 +1,4 @@
+*.json
+*.bak
+*.pyc
+ProfileCache.txt
