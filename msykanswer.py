@@ -9,9 +9,50 @@ import base64
 import rsa
 from rsa import core, PublicKey, transform
 from colorama import init, Fore, Back, Style
-# 额外功能，自行取消注释
-# import msyk_message
-# import msyk_learning_circle
+import configparser
+
+# 配置文件相关功能
+
+config = configparser.ConfigParser()
+config_file = 'settings.ini'
+
+# 如果配置文件不存在，创建默认配置
+if not os.path.exists(config_file):
+    print(Fore.YELLOW + f"未找到 {config_file}，创建默认配置文件...")
+    config['DEFAULT'] = {
+        'enable_message': 'False',
+        'enable_learning_circle': 'False'
+    }
+    with open(config_file, 'w', encoding='utf-8') as f:
+        config.write(f)
+    print(Fore.GREEN + f"已创建默认配置文件: {config_file}")
+
+# 读取配置文件
+try:
+    config.read(config_file, encoding='utf-8')
+    # 获取配置值，如果不存在则使用默认值
+    enable_message = config.getboolean('DEFAULT', 'enable_message', fallback=False)
+    enable_learning_circle = config.getboolean('DEFAULT', 'enable_learning_circle', fallback=False)
+    
+    # 根据配置动态导入模块
+    if enable_message:
+        try:
+            import msyk_message
+        except ImportError as e:
+            print(Fore.RED + f"✗ 无法导入消息系统模块: {e}")
+            enable_message = False
+    
+    if enable_learning_circle:
+        try:
+            import msyk_learning_circle
+        except ImportError as e:
+            print(Fore.RED + f"✗ 无法导入学习圈系统模块: {e}")
+            enable_learning_circle = False
+            
+except Exception as e:
+    print(Fore.RED + f"读取配置文件失败: {e}")
+    enable_message = False
+    enable_learning_circle = False
 
 # 课件下载转PDF功能，需要pillow
 try:
@@ -1268,8 +1309,16 @@ def getUnreleasedHWID():
 
 def MainMenu():
     ProfileImport = ""
-    print(Fore.MAGENTA + "1.作业获取答案(默认)\n2.跑作业id\n3.切换账号\n4.退出")
-    # print(Fore.MAGENTA + "5.消息系统\n6.学习圈系统")  # 取消注释以启用额外功能
+    menu_text = Fore.MAGENTA + "1.作业获取答案(默认)\n2.跑作业id\n3.切换账号\n4.退出"
+    
+    # 根据配置动态添加菜单项
+    if enable_message:
+        menu_text += "\n5.消息系统"
+    if enable_learning_circle:
+        menu_text += "\n6.学习圈系统"
+        
+    print(menu_text)
+    
     Mission = input(Fore.RED + "请选择要执行的任务:")
     if Mission == "2":
         getUnreleasedHWID()
@@ -1288,11 +1337,10 @@ def MainMenu():
     elif Mission == "4":  # 新增退出选项
         print(Fore.GREEN + "程序已退出")
         exit(0)
-    # 取消以下注释以启用消息系统和学习圈系统
-    # elif Mission == "5":
-    #    msyk_message.message_menu(id, unitId)
-    # elif Mission == "6":
-    #    msyk_learning_circle.learning_circle_menu(id, unitId)
+    elif Mission == "5" and enable_message:
+        msyk_message.message_menu(id, unitId)
+    elif Mission == "6" and enable_learning_circle:
+        msyk_learning_circle.learning_circle_menu(id, unitId)
     else:
         getAnswer()
 
