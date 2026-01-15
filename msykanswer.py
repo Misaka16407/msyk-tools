@@ -10,6 +10,7 @@ import rsa
 from rsa import core, PublicKey, transform
 from colorama import init, Fore, Back, Style
 import configparser
+import shutil
 
 # 配置文件相关功能
 
@@ -21,7 +22,9 @@ if not os.path.exists(config_file):
     print(Fore.YELLOW + f"未找到 {config_file}，创建默认配置文件...")
     config['DEFAULT'] = {
         'enable_message': 'False',
-        'enable_learning_circle': 'False'
+        'enable_learning_circle': 'False',
+        'auto_merge_ppt_to_pdf': 'False',
+        'auto_delete_ppt_images': 'False'
     }
     with open(config_file, 'w', encoding='utf-8') as f:
         config.write(f)
@@ -33,6 +36,8 @@ try:
     # 获取配置值，如果不存在则使用默认值
     enable_message = config.getboolean('DEFAULT', 'enable_message', fallback=False)
     enable_learning_circle = config.getboolean('DEFAULT', 'enable_learning_circle', fallback=False)
+    auto_merge_ppt_to_pdf = config.getboolean('DEFAULT', 'auto_merge_ppt_to_pdf', fallback=False)
+    auto_delete_ppt_images = config.getboolean('DEFAULT', 'auto_delete_ppt_images', fallback=False)
     
     # 根据配置动态导入模块
     if enable_message:
@@ -53,6 +58,8 @@ except Exception as e:
     print(Fore.RED + f"读取配置文件失败: {e}")
     enable_message = False
     enable_learning_circle = False
+    auto_merge_ppt_to_pdf = False
+    auto_delete_ppt_images = False
 
 # 课件下载转PDF功能，需要pillow
 try:
@@ -1026,16 +1033,52 @@ def download_ppt(ppt_resource_id, res_title):
         print(Fore.GREEN + f"下载完成！共成功下载 {success_count}/{len(ppt_pages)} 页")
         print(Fore.GREEN + f"文件保存在: {os.path.abspath(download_dir)}/")
 
-        # 如果Pillow可用，提供PDF转换选项
+        # 根据配置决定是否自动合并PDF
+        should_convert_to_pdf = False
+        pdf_converted = False
+        
+        # 如果Pillow可用且所有页面都下载成功
         if PILLOW_AVAILABLE and success_count == len(ppt_pages):
-            convert_choice = input(Fore.BLUE + "是否要转换为PDF文件？[Y/n]:")
-            if convert_choice == 'Y' or convert_choice == 'y':
-                pdf_path = convert_ppt_to_pdf(
-                    download_dir, f"{safe_title}.pdf")
+            if auto_merge_ppt_to_pdf:
+                # 配置为True，自动合并PDF
+                print(Fore.CYAN + "配置为自动合并PDF，开始转换...")
+                should_convert_to_pdf = True
+            else:
+                # 配置为False，询问用户
+                convert_choice = input(Fore.BLUE + "是否要转换为PDF文件？[Y/n]:")
+                should_convert_to_pdf = (convert_choice.lower() in ['y', ''])
+            
+            # 执行PDF转换
+            if should_convert_to_pdf:
+                pdf_path = convert_ppt_to_pdf(download_dir, f"{safe_title}.pdf")
                 if pdf_path:
                     print(Fore.GREEN + f"PDF转换成功: {pdf_path}")
+                    pdf_converted = True
+                    
+                    # 如果PDF转换成功，根据配置决定是否删除原图片文件夹
+                    if auto_delete_ppt_images:
+                        try:
+                            # 删除图片文件夹及其所有内容
+                            import shutil
+                            shutil.rmtree(download_dir)
+                            print(Fore.YELLOW + f"已自动删除图片文件夹: {download_dir}")
+                        except Exception as e:
+                            print(Fore.RED + f"删除图片文件夹失败: {e}")
+                    else:
+                        # 如果不自动删除，询问用户是否删除
+                        delete_choice = input(Fore.BLUE + "PDF已生成，是否删除原图片文件夹？[y/N]:")
+                        if delete_choice.lower() in ['y', 'yes']:
+                            try:
+                                import shutil
+                                shutil.rmtree(download_dir)
+                                print(Fore.YELLOW + f"已删除图片文件夹: {download_dir}")
+                            except Exception as e:
+                                print(Fore.RED + f"删除图片文件夹失败: {e}")
         elif not PILLOW_AVAILABLE:
-            print(Fore.YELLOW + "提示: 安装Pillow库后可以自动转换PPT为PDF")
+            if auto_merge_ppt_to_pdf:
+                print(Fore.YELLOW + "提示: Pillow库未安装，无法自动合并PDF")
+            else:
+                print(Fore.YELLOW + "提示: 安装Pillow库后可以自动转换PPT为PDF")
             print(Fore.YELLOW + "命令: pip install Pillow")
 
         return True
