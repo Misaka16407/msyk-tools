@@ -44,6 +44,7 @@
     <legend>ID 扫描</legend>
     <label>起始 ID <input id="scanStart" inputmode="numeric"></label>
     <label>向下个数 <input id="scanCount" inputmode="numeric" value="20"></label>
+    <label><input id="hideMissing" type="checkbox"> 隐藏不存在</label>
     <button id="scanBtn" disabled>开始扫描</button>
     <div id="scanStatus"></div>
     <ul id="scanList" class="scan-list"></ul>
@@ -316,6 +317,7 @@
     if (!Number.isInteger(count) || count <= 0) return setStatus('向下个数必须是正整数。', 'error');
     const list = $('scanList');
     list.innerHTML = '';
+    const hideMissing = $('hideMissing').checked;
     let hits = 0;
     for (let i = 0; i < count; i++) {
       const id = start + i;
@@ -329,9 +331,11 @@
         title = '（查询失败）';
       }
       if (title && title !== '（查询失败）') hits++;
-      const li = document.createElement('li');
-      li.textContent = id + ' ' + (title || '（无标题/不存在）');
-      list.appendChild(li);
+      if (title || !hideMissing) {
+        const li = document.createElement('li');
+        li.textContent = id + ' ' + (title || '（无标题/不存在）');
+        list.appendChild(li);
+      }
       $('scanStatus').textContent = '扫描中…… ' + (i + 1) + '/' + count;
     }
     $('scanStatus').textContent =
