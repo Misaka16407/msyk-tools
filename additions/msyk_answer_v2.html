@@ -161,14 +161,16 @@
     return '<ul>' + links + '</ul>';
   }
 
-  function renderMaterials(cardBody, statusBody) {
-    const materials = cardBody.materialRelas || [];
-    const answerFiles = cardBody.analysistList || [];
-    const resources = (statusBody && statusBody.resourceList) || [];
+  function renderMaterials(cardBody = {}, statusBody = null) {
+    const materials = Array.isArray(cardBody.materialRelas) ? cardBody.materialRelas : [];
+    const answerFiles = Array.isArray(cardBody.analysistList) ? cardBody.analysistList : [];
+    const resources = statusBody && Array.isArray(statusBody.resourceList)
+      ? statusBody.resourceList
+      : (Array.isArray(cardBody.resourceList) ? cardBody.resourceList : []);
     let html = '<section><h2>作业材料（超链接）</h2>';
     html += '<h3>材料文件</h3>' + (materials.length ? resourceLinks('材料文件', materials, false) : '<p>无材料文件</p>');
     html += '<h3>答案文件</h3>' + (answerFiles.length ? resourceLinks('答案文件', answerFiles, false) : '<p>无答案文件</p>');
-    if (resources.length) html += '<h3>资源文件</h3>' + resourceLinks('资源文件', resources, false);
+    html += '<h3>资源文件</h3>' + (resources.length ? resourceLinks('资源文件', resources, false) : '<p>无资源文件</p>');
     return html + '</section>';
   }
 
@@ -258,14 +260,22 @@
     $('results').innerHTML = '<p>正在读取……</p>';
     try {
       const body = await directCardInfo(homeworkId);
-      const cards = body.homeworkCardList || [];
-      if (!cards.length) throw new Error('响应中没有 homeworkCardList');
       let statusBody = null;
       try {
         statusBody = await jsonp(API + '/ws/common/homework/homeworkStatus', {
           homeworkId, modifyNum: 0, userId: state.studentId, unitId: state.unitId
         });
       } catch (_) {
+      }
+      const cards = body && Array.isArray(body.homeworkCardList) ? body.homeworkCardList : [];
+      if (!cards.length) {
+        const reason = body && Object.prototype.hasOwnProperty.call(body, 'homeworkCardList')
+          ? '响应中的 homeworkCardList 为空'
+          : '响应中没有 homeworkCardList';
+        $('results').innerHTML = renderMaterials(body || {}, statusBody) +
+          '<h2>答案结果（只读）</h2><p>' + htmlEscape(reason) + '，无法读取题目答案。</p>';
+        setStatus('读取失败：' + reason + '。已显示答案材料、作业材料和资源文件。', 'error');
+        return;
       }
       const rows = [];
       for (const card of cards) {
