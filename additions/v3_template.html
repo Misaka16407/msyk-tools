@@ -1,0 +1,749 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>美师优课答案查看 v3</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+  <style>
+    /* ===== 原版样式（保持 v2 风格）===== */
+    body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 24px auto; padding: 0 16px; color: #222; }
+    fieldset { margin: 12px 0; padding: 12px; }
+    label { display: inline-block; margin: 4px 12px 4px 0; }
+    input { padding: 6px; min-width: 180px; }
+    button { padding: 6px 12px; margin: 4px; cursor: pointer; }
+    #status { white-space: pre-wrap; color: #555; }
+    .error { color: #b00020; }
+    .ok { color: #087f23; }
+    table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+    th, td { border: 1px solid #ccc; padding: 7px; text-align: left; vertical-align: top; }
+    th { background: #f3f3f3; }
+    code { word-break: break-all; }
+    .scan-list { max-height: 320px; overflow: auto; margin: 8px 0 0; padding-left: 1.4em; }
+    .scan-list li { overflow-wrap: anywhere; }
+    #scanStopBtn:enabled { border-color: #b00020; color: #b00020; }
+
+    /* ===== v3：内嵌文件查看器 ===== */
+    a.file-link { color: #0b57d0; text-decoration: underline; cursor: pointer; }
+    a.file-link:hover { color: #0842a0; }
+    .hint { color: #666; font-size: 13px; margin: 6px 0; }
+
+    .viewer[hidden] { display: none; }
+    .viewer { position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column; background: rgba(20,20,20,.88); }
+    .viewer-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; background: #202124; color: #eee; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+    .viewer-title { font-weight: 600; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .viewer-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+    .viewer-tools button, .viewer-tools a { padding: 4px 9px; margin: 0; border: 1px solid #5f6368; border-radius: 4px; background: #303134; color: #e8eaed; cursor: pointer; font-size: 13px; text-decoration: none; line-height: 1.2; }
+    .viewer-tools button:hover, .viewer-tools a:hover { background: #3c4043; }
+    .viewer-tools input { min-width: 0; width: 56px; padding: 4px; text-align: center; }
+    .viewer-tools .sep { color: #9aa0a6; }
+    .viewer-close { background: #8a1c1c !important; border-color: #a33 !important; }
+    .viewer-body { flex: 1; overflow: auto; padding: 16px; text-align: center; }
+    .pdf-wrap { display: inline-block; }
+    .pdf-wrap canvas { display: block; margin: 0 auto 12px; box-shadow: 0 2px 12px rgba(0,0,0,.5); background: #fff; }
+    .media-wrap img, .media-wrap video { max-width: 100%; max-height: calc(100vh - 120px); background: #000; }
+    .media-wrap audio { width: min(680px, 90vw); margin-top: 40px; }
+    .frame { width: 100%; height: calc(100vh - 120px); border: 0; background: #fff; }
+    .textview { display: inline-block; text-align: left; background: #fff; color: #111; padding: 16px; border-radius: 6px; max-width: 100%; white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.5; }
+    .vmsg { color: #eee; margin: 24px auto; max-width: 760px; line-height: 1.7; }
+    .vmsg.error { color: #ff8a80; }
+    .vnote { color: #ddd; background: rgba(255,255,255,.08); padding: 8px 12px; border-radius: 6px; margin-bottom: 8px; font-size: 13px; }
+    .vfallback { margin-top: 16px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+    .vfallback .btn, .btn { display: inline-block; padding: 7px 14px; border-radius: 5px; background: #0b57d0; color: #fff !important; text-decoration: none; font-size: 14px; }
+    .vfallback .btn:hover { background: #0842a0; }
+    .spinner { color: #ddd; margin-top: 30px; }
+  </style>
+</head>
+<body>
+  <h1>美师优课答案查看 <small style="font-size:14px;color:#888">v3 · 内嵌预览</small></h1>
+  <p>读取并显示答案；作业材料 / 答案文件 / 资源文件可在本页内嵌打开（PDF 使用 PDF.js 渲染）。</p>
+
+  <fieldset>
+    <legend>登录</legend>
+    <label>用户名 <input id="username" autocomplete="username"></label>
+    <label>密码 <input id="password" type="password" autocomplete="current-password"></label>
+    <button id="loginBtn">登录并加载作业</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>选择作业</legend>
+    <label>作业 ID <input id="homeworkId" inputmode="numeric"></label>
+    <button id="readBtn" disabled>读取答案</button>
+    <label><input id="fallbackAll" type="checkbox"> 备用方法获取</label>
+  </fieldset>
+
+  <fieldset>
+    <legend>ID 扫描</legend>
+    <label>起始 ID <input id="scanStart" inputmode="numeric"></label>
+    <label>向下个数 <input id="scanCount" inputmode="numeric" value="20" max="500"></label>
+    <label><input id="hideMissing" type="checkbox"> 隐藏不存在</label>
+    <label><input id="scanConcurrent" type="checkbox"> 尝试并发加速</label>
+    <button id="scanBtn" disabled>开始扫描</button>
+    <button id="scanStopBtn" disabled>停止</button>
+    <div id="scanStatus"></div>
+    <ul id="scanList" class="scan-list"></ul>
+    <p class="hint">单次扫描数量上限 500；勾选「并发加速」将同时发出全部请求（暂不限速）。</p>
+  </fieldset>
+
+  <div id="status">尚未登录。</div>
+  <div id="homeworkList"></div>
+  <div id="results"></div>
+
+  <!-- ===== 内嵌文件查看器 ===== -->
+  <div id="fileViewer" class="viewer" hidden>
+    <div class="viewer-bar">
+      <span id="viewerTitle" class="viewer-title"></span>
+      <span class="viewer-tools">
+        <button id="vPrev" type="button" title="上一页">‹</button>
+        <input id="vPage" inputmode="numeric" value="1">
+        <span class="sep">/</span>
+        <span id="vPageCount">–</span>
+        <button id="vNext" type="button" title="下一页">›</button>
+        <button id="vZoomOut" type="button" title="缩小">－</button>
+        <span id="vZoomLabel">100%</span>
+        <button id="vZoomIn" type="button" title="放大">＋</button>
+        <button id="vFit" type="button" title="适应宽度">适应宽度</button>
+        <a id="vOpen" target="_blank" rel="noopener">新标签打开</a>
+        <a id="vDownload" download>下载</a>
+        <button id="vClose" class="viewer-close" type="button">✕</button>
+      </span>
+    </div>
+    <div id="viewerBody" class="viewer-body"></div>
+  </div>
+
+  <!-- ===== PDF.js v3 UMD（内联） ===== -->
+  <script>
+/*__PDFJS_LIB__*/
+  </script>
+
+  <!-- ===== 主逻辑 ===== -->
+  <script>
+  (() => {
+    'use strict';
+
+    /* ================= 基础配置 ================= */
+    const API = 'https://padapp.msyk.cn';
+    const WEB = 'https://www.msyk.cn';
+    const CDN = 'https://msyk.wpstatic.cn';
+    const state = { studentId: '', unitId: '', loggedIn: false };
+    const $ = id => document.getElementById(id);
+
+    /* ================= PDF.js 单文件内联初始化 ================= */
+    const pdfjsLib = window.pdfjsLib;
+    const WORKER_B64 = "__PDF_WORKER_B64__";
+    const CMAPS = /*__PDF_CMAPS__*/;
+    const STDFONTS = /*__PDF_STDFONTS__*/;
+
+    function b64ToBytes(b64) {
+      const bin = atob(b64);
+      const len = bin.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes;
+    }
+
+    if (pdfjsLib) {
+      try {
+        const workerBlob = new Blob([b64ToBytes(WORKER_B64)], { type: 'text/javascript' });
+        pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(workerBlob);
+      } catch (e) {
+        console.warn('PDF.js worker 初始化失败，将回退主线程：', e);
+      }
+    }
+
+    // 内联 CMap 读取工厂（处理中文等 CID 字体）
+    class InlineCMapReaderFactory {
+      constructor({ baseUrl = null, isCompressed = true } = {}) {
+        this.baseUrl = baseUrl;
+        this.isCompressed = isCompressed;
+      }
+      async fetch({ name }) {
+        const b64 = CMAPS[name];
+        if (!b64) throw new Error('未内置 CMap: ' + name);
+        return { cMapData: b64ToBytes(b64), compressionType: 1 /* BINARY */ };
+      }
+    }
+    // 内联标准字体数据工厂
+    class InlineStandardFontDataFactory {
+      constructor() {}
+      async fetch({ filename }) {
+        const b64 = STDFONTS[filename];
+        if (!b64) return new Uint8Array(0);
+        return b64ToBytes(b64);
+      }
+    }
+
+    /* ================= 通用工具 ================= */
+    function setStatus(message, kind = '') {
+      const el = $('status');
+      el.className = kind;
+      el.textContent = message;
+    }
+
+    function htmlEscape(value) {
+      return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    const __jsonpCancels = new Set();
+
+    function jsonp(url, params = {}, timeoutMs = 15000) {
+      return new Promise((resolve, reject) => {
+        const callback = '__msyk_jsonp_' + Math.random().toString(36).slice(2);
+        const script = document.createElement('script');
+        const query = new URLSearchParams({ ...params, callback }).toString();
+        let timer;
+        let settled = false;
+        const finish = (fn, arg) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          delete window[callback];
+          if (script.parentNode) script.remove();
+          __jsonpCancels.delete(cancel);
+          fn(arg);
+        };
+        const cancel = () => finish(reject, new Error('__ABORTED__'));
+        window[callback] = data => finish(resolve, data);
+        script.onerror = () => finish(reject, new Error('JSONP 请求失败: ' + url));
+        timer = setTimeout(() => finish(reject, new Error('JSONP 请求超时: ' + url)), timeoutMs);
+        __jsonpCancels.add(cancel);
+        script.src = url + '?' + query;
+        document.head.appendChild(script);
+      });
+    }
+
+    function cancelAllJsonp() {
+      for (const cancel of Array.from(__jsonpCancels)) {
+        try { cancel(); } catch (_) {}
+      }
+      __jsonpCancels.clear();
+    }
+
+    function answerForCard(card) {
+      const type = Number(card.questionType || 0);
+      if (type === 4 && Array.isArray(card.blankList) && card.blankList.length) {
+        return card.blankList.map(readableBlank).join(' / ');
+      }
+      if (card.answer !== undefined && card.answer !== null && String(card.answer) !== '') {
+        if (type === 4) return readableBlank(card.answer);
+        const raw = String(card.answer);
+        if (type === 2 && raw.length === 10 && /^[01]+$/.test(raw)) {
+          const letters = 'ABCDEFGHIJ'.split('').filter((_, i) => raw[i] === '1');
+          return letters.join('') + '  [位图: ' + raw + ']';
+        }
+        return raw;
+      }
+      return '';
+    }
+
+    function readableBlank(value) {
+      if (value && typeof value === 'object') return String(value.answer ?? value.text ?? '');
+      const raw = String(value ?? '').trim();
+      if (!raw) return '';
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          if (Array.isArray(parsed)) return parsed.map(readableBlank).join(' / ');
+          if (parsed.answer !== undefined) return String(parsed.answer);
+        }
+      } catch (_) {
+        const pieces = raw.split(/\s*\/\s*(?=\{)/);
+        if (pieces.length > 1) return pieces.map(readableBlank).join(' / ');
+      }
+      return raw;
+    }
+
+    function typeName(type) {
+      return ({1:'单选', 2:'多选', 3:'主观', 4:'填空', 5:'判断'})[Number(type)] || ('类型 ' + type);
+    }
+
+    function normalizeUrl(value) {
+      const url = String(value || '').trim();
+      if (!url) return '';
+      if (/^https?:\/\//i.test(url)) return url;
+      if (url.startsWith('//')) return 'https:' + url;
+      if (url.startsWith('/')) return CDN + url;
+      return CDN + '/' + url;
+    }
+
+    function resourceLinks(title, list, newTab = true) {
+      if (!Array.isArray(list) || !list.length) return '';
+      const links = list.map((item, i) => {
+        const name = item.title || item.resTitle || ('文件' + (i + 1));
+        const url = normalizeUrl(item.resourceUrl || item.url || item.pictureUrl);
+        if (!url || url.endsWith('--')) return '<li>' + htmlEscape(name) + '（无链接）</li>';
+        return '<li><a href="#" class="file-link" data-url="' + htmlEscape(url) +
+          '" data-name="' + htmlEscape(name) + '">' + htmlEscape(name) +
+          '</a><br><small><code>' + htmlEscape(url) + '</code></small></li>';
+      }).join('');
+      return '<ul>' + links + '</ul>';
+    }
+
+    function renderMaterials(cardBody = {}, statusBody = null) {
+      const materials = Array.isArray(cardBody.materialRelas) ? cardBody.materialRelas : [];
+      const answerFiles = Array.isArray(cardBody.analysistList) ? cardBody.analysistList : [];
+      const resources = statusBody && Array.isArray(statusBody.resourceList)
+        ? statusBody.resourceList
+        : (Array.isArray(cardBody.resourceList) ? cardBody.resourceList : []);
+      let html = '<section><h2>作业材料（超链接）</h2>';
+      html += '<h3>材料文件</h3>' + (materials.length ? resourceLinks('材料文件', materials, false) : '<p>无材料文件</p>');
+      html += '<h3>答案文件</h3>' + (answerFiles.length ? resourceLinks('答案文件', answerFiles, false) : '<p>无答案文件</p>');
+      html += '<h3>资源文件</h3>' + (resources.length ? resourceLinks('资源文件', resources, false) : '<p>无资源文件</p>');
+      return html + '</section>';
+    }
+
+    async function login() {
+      const username = $('username').value.trim();
+      const password = $('password').value;
+      if (!username || !password) throw new Error('请输入用户名和密码。');
+      if (!window.CryptoJS) throw new Error('CryptoJS 加载失败，无法计算登录 MD5。');
+      const auth = CryptoJS.MD5(username + password + 'HHOO').toString();
+      const data = await jsonp(API + '/ws/app/padLogin', { userName: username, auth });
+      if (String(data.code) !== '10000' || !data.InfoMap) {
+        throw new Error(data.message || '登录失败');
+      }
+      state.studentId = String(data.InfoMap.id || '');
+      state.unitId = String(data.InfoMap.unitId || '');
+      state.loggedIn = true;
+      $('readBtn').disabled = false;
+      $('scanBtn').disabled = false;
+      setStatus('登录成功：' + (data.InfoMap.realName || '') +
+        '\nstudentId=' + state.studentId + '\nunitId=' + state.unitId, 'ok');
+      await loadHomeworkList();
+    }
+
+    async function loadHomeworkList() {
+      const data = await jsonp(API + '/ws/student/homework/studentHomework/getHomeworkList', {
+        studentId: state.studentId, unitId: state.unitId, statu: 1,
+        pageSize: 100, pageIndex: 1, homeworkType: -1, subjectCode: ''
+      });
+      const list = data.sqHomeworkDtoList || [];
+      $('homeworkList').innerHTML = '<h2>作业列表</h2>' +
+        (list.length ? list.map(x =>
+          '<button class="hw" data-id="' + String(x.id).replace(/"/g, '&quot;') + '">' +
+          String(x.id) + ' · ' + (x.subjectName || '') + ' · ' + (x.homeworkName || '') +
+          '</button>').join(' ') : '<p>没有返回作业。</p>');
+      document.querySelectorAll('.hw').forEach(btn => btn.addEventListener('click', () => {
+        $('homeworkId').value = btn.dataset.id;
+        readAnswers();
+      }));
+    }
+
+    async function directCardInfo(homeworkId) {
+      return jsonp(API + '/ws/teacher/homeworkCard/getHomeworkCardInfo', {
+        homeworkId, studentId: '', modifyNum: 0, unitId: state.unitId
+      });
+    }
+
+    function buildQuestionUrl(card, homeworkId) {
+      return WEB + '/webview/newQuestion/singleDoHomework?' + new URLSearchParams({
+        studentId: state.studentId,
+        homeworkResourceId: card.resourceId,
+        orderNum: card.orderNum,
+        showAnswer: 1,
+        unitId: state.unitId,
+        modifyNum: 1
+      });
+    }
+
+    function parseOldHtml(html, card) {
+      const start = html.indexOf('var questions = ');
+      const end = html.indexOf('var resource', start);
+      if (start < 0 || end < 0) return '';
+      let source = html.slice(start + 16, end).trim();
+      source = source.replace(/;\s*$/, '').trim();
+      let questions;
+      try { questions = JSON.parse(source); }
+      catch (_) {
+        const fallback = html.slice(start + 16, end - 6).trim();
+        try { questions = JSON.parse(fallback); } catch (_) { return ''; }
+      }
+      if (!Array.isArray(questions) || !questions[0] || questions[0].answer == null) return '';
+      const value = questions[0].answer;
+      if (Array.isArray(value)) return value.join(' ').replace(/[\[\]"]/g, '').trim();
+      return String(value);
+    }
+
+    async function oldHtmlAnswer(card, homeworkId) {
+      const url = buildQuestionUrl(card, homeworkId);
+      const response = await fetch(url, { credentials: 'include' });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return { answer: parseOldHtml(await response.text(), card), url };
+    }
+
+    async function readAnswers() {
+      if (!state.loggedIn) return setStatus('请先登录。', 'error');
+      const homeworkId = $('homeworkId').value.trim();
+      if (!/^\d+$/.test(homeworkId)) return setStatus('作业 ID 必须是数字。', 'error');
+      $('results').innerHTML = '<p>正在读取……</p>';
+      try {
+        const body = await directCardInfo(homeworkId);
+        let statusBody = null;
+        try {
+          statusBody = await jsonp(API + '/ws/common/homework/homeworkStatus', {
+            homeworkId, modifyNum: 0, userId: state.studentId, unitId: state.unitId
+          });
+        } catch (_) {
+        }
+        const cards = body && Array.isArray(body.homeworkCardList) ? body.homeworkCardList : [];
+        if (!cards.length) {
+          const reason = body && Object.prototype.hasOwnProperty.call(body, 'homeworkCardList')
+            ? '响应中的 homeworkCardList 为空'
+            : '响应中没有 homeworkCardList';
+          $('results').innerHTML = renderMaterials(body || {}, statusBody) +
+            '<h2>答案结果（只读）</h2><p>' + htmlEscape(reason) + '，无法读取题目答案。</p>';
+          setStatus('读取失败：' + reason + '。已显示答案材料、作业材料和资源文件。', 'error');
+          return;
+        }
+        const rows = [];
+        for (const card of cards) {
+          let answer = answerForCard(card);
+          let source = answer ? 'getHomeworkCardInfo JSON' : '未找到';
+          let oldUrl = '';
+          if (!answer && $('fallbackAll').checked) {
+            try {
+              const old = await oldHtmlAnswer(card, homeworkId);
+              answer = old.answer;
+              oldUrl = old.url;
+              source = answer ? 'singleDoHomework HTML' : 'HTML 无 answer';
+            } catch (e) {
+              source = 'HTML 提取失败（通常是 CORS）';
+            }
+          }
+          rows.push({ card, answer, source, oldUrl });
+        }
+        $('results').innerHTML = renderMaterials(body, statusBody) +
+          '<p class="hint">提示：点击文件名即可在本页内嵌打开（PDF 用 PDF.js 渲染）。</p>' +
+          '<h2>答案结果（只读）</h2>' +
+          '<table><thead><tr><th>题号</th><th>题型</th><th>答案</th><th>来源</th></tr></thead><tbody>' +
+          rows.map(x => '<tr><td>' + (x.card.orderNum ?? x.card.serialNumber ?? '') +
+            '</td><td>' + typeName(x.card.questionType) +
+            '</td><td><code>' + (x.answer || '无标准答案').toString().replace(/</g, '&lt;') +
+            '</code></td><td>' + x.source + '</td></tr>').join('') +
+          '</tbody></table>';
+        setStatus('读取完成，共 ' + rows.length + ' 道题。页面未调用任何提交接口。', 'ok');
+      } catch (e) {
+        $('results').innerHTML = '';
+        setStatus('读取失败：' + e.message, 'error');
+      }
+    }
+
+    let scanAbort = false;
+    let scanning = false;
+
+    function stopScan() {
+      if (!scanning) return;
+      scanAbort = true;
+      cancelAllJsonp();
+      $('scanStopBtn').disabled = true;
+      $('scanStatus').textContent = '正在停止……';
+    }
+
+    async function scanIds() {
+      if (!state.loggedIn) return setStatus('请先登录。', 'error');
+      if (scanning) return;
+      const start = parseInt($('scanStart').value.trim(), 10);
+      const count = parseInt($('scanCount').value.trim(), 10);
+      if (!Number.isInteger(start) || start <= 0) return setStatus('起始 ID 必须是正整数。', 'error');
+      if (!Number.isInteger(count) || count <= 0) return setStatus('向下个数必须是正整数。', 'error');
+      if (count > 500) return setStatus('单次扫描数量不得超过 500。', 'error');
+      const list = $('scanList');
+      list.innerHTML = '';
+      const hideMissing = $('hideMissing').checked;
+      const concurrent = $('scanConcurrent').checked;
+      const results = new Array(count);
+      let hits = 0;
+      let done = 0;
+
+      scanAbort = false;
+      scanning = true;
+      $('scanBtn').disabled = true;
+      $('scanStopBtn').disabled = false;
+
+      const probe = async (i) => {
+        if (scanAbort) return;
+        const id = start + i;
+        let title = '';
+        try {
+          const body = await jsonp(API + '/ws/common/homework/homeworkStatus', {
+            homeworkId: id, modifyNum: 0, userId: state.studentId, unitId: state.unitId
+          });
+          title = body && body.homeworkName ? String(body.homeworkName) : '';
+        } catch (e) {
+          if (scanAbort) return;
+          title = '（查询失败）';
+        }
+        results[i] = title;
+        done++;
+        if (title && title !== '（查询失败）') hits++;
+        $('scanStatus').textContent = '扫描中…… ' + done + '/' + count + (concurrent ? '（并发）' : '');
+      };
+
+      try {
+        if (concurrent) {
+          // 并发加速：暂不限速，一次性并发全部请求
+          const tasks = [];
+          for (let i = 0; i < count; i++) {
+            if (scanAbort) break;
+            tasks.push(probe(i));
+          }
+          await Promise.all(tasks);
+        } else {
+          for (let i = 0; i < count; i++) {
+            if (scanAbort) break;
+            await probe(i);
+          }
+        }
+      } finally {
+        const aborted = scanAbort;
+        // 按 ID 顺序渲染结果（跳过未扫描 / 已取消的项）
+        for (let i = 0; i < count; i++) {
+          const title = results[i];
+          if (title == null) continue;
+          if (title || !hideMissing) {
+            const li = document.createElement('li');
+            li.textContent = (start + i) + ' ' + (title || '（无标题/不存在）');
+            list.appendChild(li);
+          }
+        }
+        $('scanStatus').textContent = aborted
+          ? ('已停止：' + start + ' ~ ' + (start + count - 1) + '，已扫描 ' + done + ' 个，命中 ' + hits + ' 个。')
+          : ('扫描完成：' + start + ' ~ ' + (start + count - 1) + '，共 ' + count + ' 个，命中 ' + hits + ' 个' +
+             (concurrent ? '（并发）' : '') + '。');
+        scanning = false;
+        scanAbort = false;
+        $('scanBtn').disabled = false;
+        $('scanStopBtn').disabled = true;
+      }
+    }
+
+    /* ================= 内嵌文件查看器逻辑 ================= */
+    let pdfDoc = null;
+    let pdfPage = 1;
+    let pdfScale = 1.15;
+    let pdfFitWidth = true;
+    let pdfRenderTask = null;
+
+    function detectKind(url, name) {
+      const clean = String(url || '').split('#')[0].split('?')[0].toLowerCase();
+      const nm = String(name || '').toLowerCase();
+      const m = clean.match(/\.([a-z0-9]+)$/) || nm.match(/\.([a-z0-9]+)$/);
+      const ext = m ? m[1] : '';
+      if (ext === 'pdf') return 'pdf';
+      if (['png','jpg','jpeg','gif','webp','bmp','svg','ico'].includes(ext)) return 'image';
+      if (['mp4','webm','ogv','mov','m4v','mkv'].includes(ext)) return 'video';
+      if (['mp3','wav','ogg','m4a','aac','flac'].includes(ext)) return 'audio';
+      if (['txt','log','csv','tsv','md','json','xml','ini','yaml','yml'].includes(ext)) return 'text';
+      if (['html','htm','xhtml'].includes(ext)) return 'html';
+      if (['doc','docx','xls','xlsx','ppt','pptx','odt','ods','odp','rtf'].includes(ext)) return 'office';
+      return 'unknown';
+    }
+
+    function showPdfTools(show) {
+      ['vPrev','vPage','vPageCount','vNext','vZoomOut','vZoomLabel','vZoomIn','vFit'].forEach(id => {
+        const el = $(id); if (el) el.style.display = show ? '' : 'none';
+      });
+    }
+
+    function destroyPdf() {
+      if (pdfRenderTask) { try { pdfRenderTask.cancel(); } catch (_) {} pdfRenderTask = null; }
+      if (pdfDoc) { try { pdfDoc.destroy(); } catch (_) {} pdfDoc = null; }
+      pdfPage = 1;
+    }
+
+    function fallbackButtons(url) {
+      const u = htmlEscape(url);
+      const g = 'https://docs.google.com/viewer?embedded=true&url=' + encodeURIComponent(url);
+      return '<div class="vfallback">' +
+        '<a class="btn" href="' + u + '" target="_blank" rel="noopener">新标签打开</a>' +
+        '<a class="btn" href="' + u + '" download>下载</a>' +
+        '<a class="btn" href="' + htmlEscape(g) + '" target="_blank" rel="noopener">Google 查看器</a>' +
+        '</div>';
+    }
+
+    function openFileViewer(url, name) {
+      if (!url) return;
+      const viewer = $('fileViewer');
+      viewer.hidden = false;
+      document.documentElement.style.overflow = 'hidden';
+      $('viewerTitle').textContent = name || url;
+      $('viewerTitle').title = name || url;
+      $('vOpen').href = url;
+      $('vDownload').href = url;
+      try { $('vDownload').setAttribute('download', name || ''); } catch (_) {}
+      destroyPdf();
+      const body = $('viewerBody');
+      body.innerHTML = '';
+      const kind = detectKind(url, name);
+      showPdfTools(kind === 'pdf');
+      $('vPage').value = '1';
+      $('vPageCount').textContent = '–';
+      $('vZoomLabel').textContent = '100%';
+      if (kind === 'pdf') return openPdf(url);
+      if (kind === 'image') { body.innerHTML = '<div class="media-wrap"><img alt="" src="' + htmlEscape(url) + '"></div>'; return; }
+      if (kind === 'video') { body.innerHTML = '<div class="media-wrap"><video controls playsinline src="' + htmlEscape(url) + '"></video></div>'; return; }
+      if (kind === 'audio') { body.innerHTML = '<div class="media-wrap"><audio controls src="' + htmlEscape(url) + '"></audio></div>'; return; }
+      if (kind === 'html') { body.innerHTML = '<iframe class="frame" src="' + htmlEscape(url) + '"></iframe>'; return; }
+      if (kind === 'office') return openOffice(url);
+      if (kind === 'text') return openText(url);
+      body.innerHTML = '<div class="vmsg">该文件类型暂不支持内嵌预览。<br><small>' + htmlEscape(url) + '</small>' + fallbackButtons(url) + '</div>';
+    }
+
+    function closeViewer() {
+      destroyPdf();
+      $('viewerBody').innerHTML = '';
+      $('fileViewer').hidden = true;
+      document.documentElement.style.overflow = '';
+    }
+
+    async function openPdf(url) {
+      const body = $('viewerBody');
+      body.innerHTML = '<div class="vmsg spinner">正在加载 PDF……</div>';
+      if (!pdfjsLib) {
+        body.innerHTML = '<div class="vmsg error">PDF.js 未能加载。' + fallbackButtons(url) + '</div>';
+        return;
+      }
+      try {
+        const task = pdfjsLib.getDocument({
+          url: url,
+          cMapPacked: true,
+          CMapReaderFactory: InlineCMapReaderFactory,
+          StandardFontDataFactory: InlineStandardFontDataFactory,
+          useSystemFonts: true,
+          isEvalSupported: true
+        });
+        pdfDoc = await task.promise;
+        $('vPageCount').textContent = pdfDoc.numPages;
+        $('vPage').max = pdfDoc.numPages;
+        $('vPage').value = '1';
+        pdfPage = 1;
+        body.innerHTML = '<div id="pdfCanvasWrap" class="pdf-wrap"></div>';
+        await renderPdfPage(1);
+      } catch (e) {
+        body.innerHTML = '<div class="vmsg error">PDF 加载失败：' + htmlEscape(e && e.message ? e.message : String(e)) +
+          '<br>常见原因是跨域（CORS）限制或文件需登录。可用下方方式打开。' + fallbackButtons(url) + '</div>';
+      }
+    }
+
+    async function renderPdfPage(num) {
+      if (!pdfDoc) return;
+      const body = $('viewerBody');
+      let wrap = $('pdfCanvasWrap');
+      if (!wrap) { body.innerHTML = '<div id="pdfCanvasWrap" class="pdf-wrap"></div>'; wrap = $('pdfCanvasWrap'); }
+      try {
+        const page = await pdfDoc.getPage(num);
+        const base = page.getViewport({ scale: 1 });
+        let scale = pdfScale;
+        if (pdfFitWidth) {
+          const avail = Math.max(200, (body.clientWidth || window.innerWidth) - 48);
+          scale = avail / base.width;
+        }
+        const viewport = page.getViewport({ scale });
+        const dpr = window.devicePixelRatio || 1;
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d', { alpha: false });
+        canvas.width = Math.floor(viewport.width * dpr);
+        canvas.height = Math.floor(viewport.height * dpr);
+        canvas.style.width = Math.floor(viewport.width) + 'px';
+        canvas.style.height = Math.floor(viewport.height) + 'px';
+        const renderContext = { canvasContext: ctx, viewport };
+        if (dpr !== 1) renderContext.transform = [dpr, 0, 0, dpr, 0, 0];
+        wrap.innerHTML = '';
+        wrap.appendChild(canvas);
+        if (pdfRenderTask) { try { pdfRenderTask.cancel(); } catch (_) {} }
+        pdfRenderTask = page.render(renderContext);
+        await pdfRenderTask.promise;
+        pdfRenderTask = null;
+        $('vPage').value = String(num);
+        $('vZoomLabel').textContent = Math.round(scale * 100) + '%';
+        body.scrollTop = 0;
+      } catch (e) {
+        if (e && e.name === 'RenderingCancelledException') return;
+        body.innerHTML = '<div class="vmsg error">渲染第 ' + num + ' 页失败：' + htmlEscape(e && e.message ? e.message : String(e)) + '</div>';
+      }
+    }
+
+    function pdfGo(delta) {
+      if (!pdfDoc) return;
+      const target = Math.min(Math.max(1, pdfPage + delta), pdfDoc.numPages);
+      if (target === pdfPage) return;
+      pdfPage = target;
+      renderPdfPage(pdfPage);
+    }
+
+    function pdfGoto(num) {
+      if (!pdfDoc) return;
+      const n = parseInt(num, 10);
+      if (!Number.isInteger(n)) { $('vPage').value = String(pdfPage); return; }
+      const target = Math.min(Math.max(1, n), pdfDoc.numPages);
+      pdfPage = target;
+      renderPdfPage(pdfPage);
+    }
+
+    function pdfZoom(factor) {
+      if (!pdfDoc) return;
+      pdfFitWidth = false;
+      pdfScale = Math.min(Math.max(0.25, pdfScale * factor), 5);
+      renderPdfPage(pdfPage);
+    }
+
+    function pdfFit() {
+      if (!pdfDoc) return;
+      pdfFitWidth = true;
+      renderPdfPage(pdfPage);
+    }
+
+    async function openText(url) {
+      const body = $('viewerBody');
+      body.innerHTML = '<div class="vmsg spinner">正在加载文本……</div>';
+      try {
+        const resp = await fetch(url, { credentials: 'omit' });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        let text = await resp.text();
+        if (text.length > 2000000) text = text.slice(0, 2000000) + '\n\n…（内容过长，已截断）';
+        body.innerHTML = '<pre class="textview"></pre>';
+        body.querySelector('pre').textContent = text;
+      } catch (e) {
+        body.innerHTML = '<div class="vmsg error">文本加载失败：' + htmlEscape(e && e.message ? e.message : String(e)) +
+          '（可能跨域）' + fallbackButtons(url) + '</div>';
+      }
+    }
+
+    function openOffice(url) {
+      const body = $('viewerBody');
+      const viewer = 'https://view.officeapps.live.com/op/view.aspx?src=' + encodeURIComponent(url);
+      body.innerHTML = '<div class="vnote">Office 文档通过 Office Online 预览（需文件可公开访问）。若下方空白，请用「新标签打开」或「下载」。</div>' +
+        '<iframe class="frame" src="' + htmlEscape(viewer) + '"></iframe>';
+    }
+
+    /* ================= 事件绑定 ================= */
+    $('vClose').addEventListener('click', closeViewer);
+    $('vPrev').addEventListener('click', () => pdfGo(-1));
+    $('vNext').addEventListener('click', () => pdfGo(1));
+    $('vPage').addEventListener('change', e => pdfGoto(e.target.value));
+    $('vPage').addEventListener('keydown', e => { if (e.key === 'Enter') pdfGoto(e.target.value); });
+    $('vZoomIn').addEventListener('click', () => pdfZoom(1.2));
+    $('vZoomOut').addEventListener('click', () => pdfZoom(1 / 1.2));
+    $('vFit').addEventListener('click', pdfFit);
+    document.addEventListener('keydown', e => {
+      if ($('fileViewer').hidden) return;
+      if (e.key === 'Escape') closeViewer();
+      else if (e.key === 'ArrowLeft') pdfGo(-1);
+      else if (e.key === 'ArrowRight') pdfGo(1);
+    });
+    document.addEventListener('click', e => {
+      const a = e.target.closest && e.target.closest('a.file-link');
+      if (!a) return;
+      e.preventDefault();
+      openFileViewer(a.dataset.url, a.dataset.name);
+    });
+
+    $('loginBtn').addEventListener('click', () => login().catch(e => setStatus(e.message, 'error')));
+    $('readBtn').addEventListener('click', readAnswers);
+    $('scanBtn').addEventListener('click', () => scanIds().catch(e => setStatus(e.message, 'error')));
+    $('scanStopBtn').addEventListener('click', stopScan);
+  })();
+  </script>
+</body>
+</html>
