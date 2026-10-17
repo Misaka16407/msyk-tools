@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>美师优课答案查看</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 24px auto; padding: 0 16px; color: #222; }
+    fieldset { margin: 12px 0; padding: 12px; }
+    label { display: inline-block; margin: 4px 12px 4px 0; }
+    input { padding: 6px; min-width: 180px; }
+    button { padding: 6px 12px; margin: 4px; cursor: pointer; }
+    #status { white-space: pre-wrap; color: #555; }
+    .error { color: #b00020; }
+    .ok { color: #087f23; }
+    table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+    th, td { border: 1px solid #ccc; padding: 7px; text-align: left; vertical-align: top; }
+    th { background: #f3f3f3; }
+    code { word-break: break-all; }
+    .scan-list { max-height: 320px; overflow: auto; margin: 8px 0 0; padding-left: 1.4em; }
+    .scan-list li { overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <h1>美师优课答案查看</h1>
+  <p>读取和显示答案</p>
+
+  <fieldset>
+    <legend>登录</legend>
+    <label>用户名 <input id="username" autocomplete="username"></label>
+    <label>密码 <input id="password" type="password" autocomplete="current-password"></label>
+    <button id="loginBtn">登录并加载作业</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>选择作业</legend>
+    <label>作业 ID <input id="homeworkId" inputmode="numeric"></label>
+    <button id="readBtn" disabled>读取答案</button>
+    <label><input id="fallbackAll" type="checkbox"> 备用方法获取</label>
+  </fieldset>
+
+  <fieldset>
+    <legend>ID 扫描</legend>
+    <label>起始 ID <input id="scanStart" inputmode="numeric"></label>
+    <label>向下个数 <input id="scanCount" inputmode="numeric" value="20"></label>
+    <label><input id="hideMissing" type="checkbox"> 隐藏不存在</label>
+    <button id="scanBtn" disabled>开始扫描</button>
+    <div id="scanStatus"></div>
+    <ul id="scanList" class="scan-list"></ul>
+  </fieldset>
+
+  <div id="status">尚未登录。</div>
+  <div id="homeworkList"></div>
+  <div id="results"></div>
+
+<script>
+(() => {
+  'use strict';
+
+  const API = 'https://padapp.msyk.cn';
+  const WEB = 'https://www.msyk.cn';
+  const CDN = 'https://msyk.wpstatic.cn';
+  const state = { studentId: '', unitId: '', loggedIn: false };
+  const $ = id => document.getElementById(id);
+
+  function setStatus(message, kind = '') {
+    $('status').className = kind;
+    $('status').textContent = message;
+  }
+
+  function jsonp(url, params = {}, timeoutMs = 15000) {
+    return new Promise((resolve, reject) => {
+      const callback = '__msyk_jsonp_' + Math.random().toString(36).slice(2);
+      const script = document.createElement('script');
+      const query = new URLSearchParams({ ...params, callback }).toString();
+      let timer;
+      window[callback] = data => {
+        clearTimeout(timer);
+        delete window[callback];
+        script.remove();
+        resolve(data);
+      };
+      script.onerror = () => {
+        clearTimeout(timer);
+        delete window[callback];
+        script.remove();
+        reject(new Error('JSONP 请求失败: ' + url));
+      };
+      timer = setTimeout(() => {
+        delete window[callback];
+        script.remove();
+        reject(new Error('JSONP 请求超时: ' + url));
+      }, timeoutMs);
+      script.src = url + '?' + query;
+      document.head.appendChild(script);
+    });
+  }
+
+  function answerForCard(card) {
+    const type = Number(card.questionType || 0);
+    if (type === 4 && Array.isArray(card.blankList) && card.blankList.length) {
+      return card.blankList.map(readableBlank).join(' / ');
+    }
+    if (card.answer !== undefined && card.answer !== null && String(card.answer) !== '') {
+      if (type === 4) return readableBlank(card.answer);
+      const raw = String(card.answer);
+      if (type === 2 && raw.length === 10 && /^[01]+$/.test(raw)) {
+        const letters = 'ABCDEFGHIJ'.split('').filter((_, i) => raw[i] === '1');
+        return letters.join('') + '  [位图: ' + raw + ']';
+      }
+      return raw;
+    }
+    return '';
+  }
+
+  function readableBlank(value) {
+    if (value && typeof value === 'object') return String(value.answer ?? value.text ?? '');
+    const raw = String(value ?? '').trim();
+    if (!raw) return '';
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        if (Array.isArray(parsed)) return parsed.map(readableBlank).join(' / ');
+        if (parsed.answer !== undefined) return String(parsed.answer);
+      }
+    } catch (_) {
+      const pieces = raw.split(/\s*\/\s*(?=\{)/);
+      if (pieces.length > 1) return pieces.map(readableBlank).join(' / ');
+    }
+    return raw;
+  }
+
+  function typeName(type) {
+    return ({1:'单选', 2:'多选', 3:'主观', 4:'填空', 5:'判断'})[Number(type)] || ('类型 ' + type);
+  }
+
+  function normalizeUrl(value) {
+    const url = String(value || '').trim();
+    if (!url) return '';
+    if (/^https?:\/\//i.test(url)) return url;
+    if (url.startsWith('//')) return 'https:' + url;
+    if (url.startsWith('/')) return CDN + url;
+    return CDN + '/' + url;
+  }
+
+  function htmlEscape(value) {
+    return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  function resourceLinks(title, list, newTab = true) {
+    if (!Array.isArray(list) || !list.length) return '';
+    const target = newTab ? ' target="_blank" rel="noopener"' : '';
+    const links = list.map((item, i) => {
+      const name = item.title || item.resTitle || ('文件' + (i + 1));
+      const url = normalizeUrl(item.resourceUrl || item.url || item.pictureUrl);
+      if (!url || url.endsWith('--')) return '<li>' + htmlEscape(name) + '（无链接）</li>';
+      return '<li><a href="' + htmlEscape(url) + '"' + target + '>' +
+        htmlEscape(name) + '</a><br><small><code>' + htmlEscape(url) + '</code></small></li>';
+    }).join('');
+    return '<ul>' + links + '</ul>';
+  }
+
+  function renderMaterials(cardBody = {}, statusBody = null) {
+    const materials = Array.isArray(cardBody.materialRelas) ? cardBody.materialRelas : [];
+    const answerFiles = Array.isArray(cardBody.analysistList) ? cardBody.analysistList : [];
+    const resources = statusBody && Array.isArray(statusBody.resourceList)
+      ? statusBody.resourceList
+      : (Array.isArray(cardBody.resourceList) ? cardBody.resourceList : []);
+    let html = '<section><h2>作业材料（超链接）</h2>';
+    html += '<h3>材料文件</h3>' + (materials.length ? resourceLinks('材料文件', materials, false) : '<p>无材料文件</p>');
+    html += '<h3>答案文件</h3>' + (answerFiles.length ? resourceLinks('答案文件', answerFiles, false) : '<p>无答案文件</p>');
+    html += '<h3>资源文件</h3>' + (resources.length ? resourceLinks('资源文件', resources, false) : '<p>无资源文件</p>');
+    return html + '</section>';
+  }
+
+  async function login() {
+    const username = $('username').value.trim();
+    const password = $('password').value;
+    if (!username || !password) throw new Error('请输入用户名和密码。');
+    if (!window.CryptoJS) throw new Error('CryptoJS 加载失败，无法计算登录 MD5。');
+    const auth = CryptoJS.MD5(username + password + 'HHOO').toString();
+    const data = await jsonp(API + '/ws/app/padLogin', { userName: username, auth });
+    if (String(data.code) !== '10000' || !data.InfoMap) {
+      throw new Error(data.message || '登录失败');
+    }
+    state.studentId = String(data.InfoMap.id || '');
+    state.unitId = String(data.InfoMap.unitId || '');
+    state.loggedIn = true;
+    $('readBtn').disabled = false;
+    $('scanBtn').disabled = false;
+    setStatus('登录成功：' + (data.InfoMap.realName || '') +
+      '\nstudentId=' + state.studentId + '\nunitId=' + state.unitId, 'ok');
+    await loadHomeworkList();
+  }
+
+  async function loadHomeworkList() {
+    const data = await jsonp(API + '/ws/student/homework/studentHomework/getHomeworkList', {
+      studentId: state.studentId, unitId: state.unitId, statu: 1,
+      pageSize: 100, pageIndex: 1, homeworkType: -1, subjectCode: ''
+    });
+    const list = data.sqHomeworkDtoList || [];
+    $('homeworkList').innerHTML = '<h2>作业列表</h2>' +
+      (list.length ? list.map(x =>
+        '<button class="hw" data-id="' + String(x.id).replace(/"/g, '&quot;') + '">' +
+        String(x.id) + ' · ' + (x.subjectName || '') + ' · ' + (x.homeworkName || '') +
+        '</button>').join(' ') : '<p>没有返回作业。</p>');
+    document.querySelectorAll('.hw').forEach(btn => btn.addEventListener('click', () => {
+      $('homeworkId').value = btn.dataset.id;
+      readAnswers();
+    }));
+  }
+
+  async function directCardInfo(homeworkId) {
+    return jsonp(API + '/ws/teacher/homeworkCard/getHomeworkCardInfo', {
+      homeworkId, studentId: '', modifyNum: 0, unitId: state.unitId
+    });
+  }
+
+  function buildQuestionUrl(card, homeworkId) {
+    return WEB + '/webview/newQuestion/singleDoHomework?' + new URLSearchParams({
+      studentId: state.studentId,
+      homeworkResourceId: card.resourceId,
+      orderNum: card.orderNum,
+      showAnswer: 1,
+      unitId: state.unitId,
+      modifyNum: 1
+    });
+  }
+
+  function parseOldHtml(html, card) {
+    const start = html.indexOf('var questions = ');
+    const end = html.indexOf('var resource', start);
+    if (start < 0 || end < 0) return '';
+    let source = html.slice(start + 16, end).trim();
+    source = source.replace(/;\s*$/, '').trim();
+    let questions;
+    try { questions = JSON.parse(source); }
+    catch (_) {
+      const fallback = html.slice(start + 16, end - 6).trim();
+      try { questions = JSON.parse(fallback); } catch (_) { return ''; }
+    }
+    if (!Array.isArray(questions) || !questions[0] || questions[0].answer == null) return '';
+    const value = questions[0].answer;
+    if (Array.isArray(value)) return value.join(' ').replace(/[\[\]"]/g, '').trim();
+    return String(value);
+  }
+
+  async function oldHtmlAnswer(card, homeworkId) {
+    const url = buildQuestionUrl(card, homeworkId);
+    const response = await fetch(url, { credentials: 'include' });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    return { answer: parseOldHtml(await response.text(), card), url };
+  }
+
+  async function readAnswers() {
+    if (!state.loggedIn) return setStatus('请先登录。', 'error');
+    const homeworkId = $('homeworkId').value.trim();
+    if (!/^\d+$/.test(homeworkId)) return setStatus('作业 ID 必须是数字。', 'error');
+    $('results').innerHTML = '<p>正在读取……</p>';
+    try {
+      const body = await directCardInfo(homeworkId);
+      let statusBody = null;
+      try {
+        statusBody = await jsonp(API + '/ws/common/homework/homeworkStatus', {
+          homeworkId, modifyNum: 0, userId: state.studentId, unitId: state.unitId
+        });
+      } catch (_) {
+      }
+      const cards = body && Array.isArray(body.homeworkCardList) ? body.homeworkCardList : [];
+      if (!cards.length) {
+        const reason = body && Object.prototype.hasOwnProperty.call(body, 'homeworkCardList')
+          ? '响应中的 homeworkCardList 为空'
+          : '响应中没有 homeworkCardList';
+        $('results').innerHTML = renderMaterials(body || {}, statusBody) +
+          '<h2>答案结果（只读）</h2><p>' + htmlEscape(reason) + '，无法读取题目答案。</p>';
+        setStatus('读取失败：' + reason + '。已显示答案材料、作业材料和资源文件。', 'error');
+        return;
+      }
+      const rows = [];
+      for (const card of cards) {
+        let answer = answerForCard(card);
+        let source = answer ? 'getHomeworkCardInfo JSON' : '未找到';
+        let oldUrl = '';
+        if (!answer && $('fallbackAll').checked) {
+          try {
+            const old = await oldHtmlAnswer(card, homeworkId);
+            answer = old.answer;
+            oldUrl = old.url;
+            source = answer ? 'singleDoHomework HTML' : 'HTML 无 answer';
+          } catch (e) {
+            source = 'HTML 提取失败（通常是 CORS）';
+          }
+        }
+        rows.push({ card, answer, source, oldUrl });
+      }
+      $('results').innerHTML = renderMaterials(body, statusBody) + '<h2>答案结果（只读）</h2>' +
+        '<table><thead><tr><th>题号</th><th>题型</th><th>答案</th><th>来源</th></tr></thead><tbody>' +
+        rows.map(x => '<tr><td>' + (x.card.orderNum ?? x.card.serialNumber ?? '') +
+          '</td><td>' + typeName(x.card.questionType) +
+          '</td><td><code>' + (x.answer || '无标准答案').toString().replace(/</g, '&lt;') +
+          '</code></td><td>' + x.source + '</td></tr>').join('') +
+        '</tbody></table>';
+      setStatus('读取完成，共 ' + rows.length + ' 道题。页面未调用任何提交接口。', 'ok');
+    } catch (e) {
+      $('results').innerHTML = '';
+      setStatus('读取失败：' + e.message, 'error');
+    }
+  }
+
+  async function scanIds() {
+    if (!state.loggedIn) return setStatus('请先登录。', 'error');
+    const start = parseInt($('scanStart').value.trim(), 10);
+    const count = parseInt($('scanCount').value.trim(), 10);
+    if (!Number.isInteger(start) || start <= 0) return setStatus('起始 ID 必须是正整数。', 'error');
+    if (!Number.isInteger(count) || count <= 0) return setStatus('向下个数必须是正整数。', 'error');
+    const list = $('scanList');
+    list.innerHTML = '';
+    const hideMissing = $('hideMissing').checked;
+    let hits = 0;
+    for (let i = 0; i < count; i++) {
+      const id = start + i;
+      let title = '';
+      try {
+        const body = await jsonp(API + '/ws/common/homework/homeworkStatus', {
+          homeworkId: id, modifyNum: 0, userId: state.studentId, unitId: state.unitId
+        });
+        title = body && body.homeworkName ? String(body.homeworkName) : '';
+      } catch (e) {
+        title = '（查询失败）';
+      }
+      if (title && title !== '（查询失败）') hits++;
+      if (title || !hideMissing) {
+        const li = document.createElement('li');
+        li.textContent = id + ' ' + (title || '（无标题/不存在）');
+        list.appendChild(li);
+      }
+      $('scanStatus').textContent = '扫描中…… ' + (i + 1) + '/' + count;
+    }
+    $('scanStatus').textContent =
+      '扫描完成：' + start + ' ~ ' + (start + count - 1) + '，共 ' + count + ' 个，命中 ' + hits + ' 个。';
+  }
+
+  $('loginBtn').addEventListener('click', () => login().catch(e => setStatus(e.message, 'error')));
+  $('readBtn').addEventListener('click', readAnswers);
+  $('scanBtn').addEventListener('click', () => scanIds().catch(e => setStatus(e.message, 'error')));
+})();
+</script>
+</body>
+</html>
