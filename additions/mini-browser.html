@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mini Browser</title>
+<style>
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font-family:system-ui,sans-serif;color:#222;background:#f2f2f2;display:flex;align-items:center;justify-content:center}
+.window{width:min(1120px,96vw);height:min(800px,96vh);border:1px solid #ccc;background:#fff;display:flex;flex-direction:column;overflow:hidden}
+.titlebar{height:32px;flex:none;display:flex;align-items:center;gap:10px;padding:0 10px;border-bottom:1px solid #ccc;font-size:13px;color:#555}
+.lights{display:flex;gap:6px}.lights .l{width:10px;height:10px;border:1px solid #999;border-radius:50%}
+.wintitle{flex:1;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.winright{width:46px}
+.tabbar{height:34px;flex:none;display:flex;align-items:center;gap:4px;padding:0 6px;border-bottom:1px solid #ccc;overflow-x:auto}
+.tab{height:26px;max-width:200px;display:flex;align-items:center;gap:6px;padding:0 8px;border:1px solid #ccc;background:#f3f3f3;cursor:pointer;font-size:13px}
+.tab.active{background:#fff;font-weight:600}
+.tab-title{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tab-close{border:none;background:none;padding:0;color:#888;cursor:pointer;font-size:14px;line-height:1}
+.newtab{width:26px;height:26px;border:1px solid #ccc;background:#fff;cursor:pointer;font-size:16px;line-height:1}
+.toolbar{height:40px;flex:none;display:flex;align-items:center;gap:4px;padding:0 6px;border-bottom:1px solid #ccc}
+.nav{width:30px;height:30px;border:1px solid #ccc;background:#fff;cursor:pointer;font-size:15px;line-height:1}
+.nav:disabled{color:#bbb;cursor:default}
+.addr{flex:1;margin:0 4px;display:flex}
+.addr-input{width:100%;height:30px;border:1px solid #ccc;padding:0 10px;font-size:13px;outline:none}
+.mode{height:30px;border:1px solid #ccc;background:#fff;cursor:pointer;font-size:12px;padding:0 8px;min-width:52px}
+.mode.reader{background:#f3f3f3;font-weight:600}
+.settings{flex:none;padding:8px 10px;border-bottom:1px solid #ccc;background:#fafafa;font-size:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.settings[hidden]{display:none}
+.settings input{flex:1;min-width:220px;height:28px;border:1px solid #ccc;padding:0 8px;font-size:12px}
+.hint{color:#888}
+.content{position:relative;flex:1;overflow:auto}
+.content.loading::before{content:'';position:absolute;top:0;left:0;height:2px;width:40%;background:#888;animation:loadbar .9s ease-in-out infinite;z-index:9}
+@keyframes loadbar{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}
+.webview{position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff}
+.statusbar{height:22px;flex:none;display:flex;align-items:center;padding:0 10px;border-top:1px solid #ccc;font-size:12px;color:#555}
+.statusbar .right{margin-left:auto;color:#888}
+/* 阅读模式内容样式（本地渲染） */
+.reader{max-width:860px;margin:0 auto;padding:20px 24px 60px;line-height:1.75;color:#222;font-size:15px;overflow-wrap:break-word}
+.reader img{max-width:100%;height:auto}
+.reader a{color:#1a0dab;text-decoration:none}.reader a:hover{text-decoration:underline}
+.reader h1{font-size:26px;margin:.6em 0 .4em}.reader h2{font-size:21px;margin:.9em 0 .4em}.reader h3{font-size:17px;margin:.8em 0 .3em}
+.reader h4,.reader h5,.reader h6{font-size:15px;margin:.8em 0 .3em}
+.reader p{margin:.6em 0}.reader .muted{color:#888;font-size:13px}
+.reader pre{background:#f6f8fa;border:1px solid #ccc;padding:10px;overflow:auto;font-size:13px;white-space:pre}
+.reader code{background:#f2f2f2;padding:1px 4px;font-size:13px;font-family:ui-monospace,monospace}
+.reader pre code{background:none;padding:0}
+.reader blockquote{border-left:3px solid #ccc;margin:.6em 0;padding:.2em 12px;color:#666}
+.reader ul,.reader ol{padding-left:1.6em;margin:.5em 0}.reader li{margin:.2em 0}
+.reader table{border-collapse:collapse;margin:.6em 0;max-width:100%}.reader td,.reader th{border:1px solid #ccc;padding:6px 8px}
+.reader hr{border:none;border-top:1px solid #ccc;margin:1em 0}
+.reader .home{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin:16px 0}
+.reader .home-link{display:block;border:1px solid #ccc;padding:14px;text-align:center;color:#1a0dab;text-decoration:none;cursor:pointer}
+.reader .home-link:hover{border-color:#888}
+.reader .ping-row{display:flex;gap:8px;margin:12px 0;max-width:520px}
+.reader .ping-input{flex:1;height:32px;border:1px solid #ccc;padding:0 10px;font-size:14px;outline:none}
+.reader .ping-out{white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:13px;color:#333;background:#fafafa;border:1px solid #ccc;padding:10px;min-height:18px;max-width:640px}
+.reader .pg-btn{border:1px solid #ccc;background:#fff;padding:6px 14px;font-size:14px;cursor:pointer;margin:8px 0}
+</style>
+</head>
+<body>
+  <div class="window">
+    <div class="titlebar">
+      <div class="lights"><span class="l"></span><span class="l"></span><span class="l"></span></div>
+      <div class="wintitle" id="wintitle">Mini Browser</div>
+      <div class="winright"></div>
+    </div>
+
+    <div class="tabbar" id="tabbar">
+      <button class="newtab" id="newtab" title="新建标签页">+</button>
+    </div>
+
+    <div class="toolbar">
+      <button class="nav" id="backBtn" title="后退">‹</button>
+      <button class="nav" id="fwdBtn" title="前进">›</button>
+      <button class="nav" id="refreshBtn" title="刷新">⟳</button>
+      <button class="nav" id="homeBtn" title="主页">⌂</button>
+      <form class="addr" id="addrForm">
+        <input id="addrInput" class="addr-input" spellcheck="false" autocomplete="off" placeholder="输入网址或搜索词，回车访问…">
+      </form>
+      <button class="nav go" id="goBtn" title="前往">→</button>
+      <button class="mode" id="modeBtn" title="切换 网页/阅读 模式">网页</button>
+      <button class="nav" id="settingsBtn" title="设置">⚙</button>
+    </div>
+
+    <div class="settings" id="settings" hidden>
+      <label><input type="checkbox" id="directCors" style="flex:none;width:auto;height:auto;min-width:0"> 直接跨域（浏览器已允许跨域时勾选，跳过所有代理）</label>
+      <label>自定义 CORS 代理（含 {url} 占位符；留空用内置）</label>
+      <input id="proxyInput" placeholder="https://你的代理/?url={url}">
+      <button class="pg-btn" id="saveProxy">保存</button>
+      <span class="hint">勾选「直接跨域」后阅读模式只走直连、不走代理。</span>
+    </div>
+
+    <div class="content" id="viewport"></div>
+
+    <div class="statusbar">
+      <span id="statusText">完成</span>
+      <span class="right" id="statusRight">网页模式 · iframe</span>
+    </div>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+
+  var viewport = document.getElementById('viewport');
+  var tabbar = document.getElementById('tabbar');
+  var newtabBtn = document.getElementById('newtab');
+  var addrInput = document.getElementById('addrInput');
+  var addrForm = document.getElementById('addrForm');
+  var backBtn = document.getElementById('backBtn');
+  var fwdBtn = document.getElementById('fwdBtn');
+  var refreshBtn = document.getElementById('refreshBtn');
+  var homeBtn = document.getElementById('homeBtn');
+  var goBtn = document.getElementById('goBtn');
+  var modeBtn = document.getElementById('modeBtn');
+  var settingsBtn = document.getElementById('settingsBtn');
+  var settings = document.getElementById('settings');
+  var proxyInput = document.getElementById('proxyInput');
+  var saveProxy = document.getElementById('saveProxy');
+  var directCorsEl = document.getElementById('directCors');
+  var statusText = document.getElementById('statusText');
+  var statusRight = document.getElementById('statusRight');
+  var wintitle = document.getElementById('wintitle');
+
+  var mode = localStorage.getItem('mb_mode') || 'web';       // 'web' | 'reader'
+  var customProxy = localStorage.getItem('mb_proxy') || '';
+  var directCors = localStorage.getItem('mb_direct') === '1';
+
+  var tabs = [];
+  var activeId = null;
+  var seq = 1;
+  var navToken = 0;
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function setStatus(msg) { statusText.textContent = msg; }
+  function hostOf(u) { try { return new URL(u).host; } catch (e) { return u; } }
+  function tabById(id) { for (var i = 0; i < tabs.length; i++) if (tabs[i].id === id) return tabs[i]; return null; }
+  function activeTab() { return tabById(activeId); }
+
+  function resolveUrl(input) {
+    var u = String(input == null ? '' : input).trim();
+    if (!u) return 'about:home';
+    if (/^about:/i.test(u)) return u;
+    if (/^https?:\/\//i.test(u)) return u;
+    if (/^[\w-]+(\.[\w-]+)+(\/|$)/.test(u) && !/\s/.test(u)) return 'https://' + u;
+    return 'https://www.baidu.com/s?wd=' + encodeURIComponent(u);
+  }
+
+  /* ---------------- 抓取（直连 -> 代理 -> 阅读器） ---------------- */
+  function badPage(t) {
+    if (!t || t.length < 20) return true;
+    if (/^error code:\s*\d+/i.test(t.trim())) return true;
+    if (/^\s*<title>\s*(4\d\d|5\d\d)\b/i.test(t)) return true;
+    return false;
+  }
+  function tryFetch(url, ms) {
+    ms = ms || 20000;
+    var ctrl = new AbortController();
+    var timer = setTimeout(function () { ctrl.abort(); }, ms);
+    return fetch(url, { signal: ctrl.signal, credentials: 'omit', referrerPolicy: 'no-referrer' })
+      .then(function (r) { return r.text().then(function (t) { return { ok: r.ok, status: r.status, text: t, ct: r.headers.get('content-type') || '' }; }); })
+      .finally(function () { clearTimeout(timer); });
+  }
+  function fetchText(url) {
+    var lastErr = '';
+    return tryFetch(url).then(function (r) {
+      if (r.ok && !badPage(r.text)) return { text: r.text, ct: r.ct, via: '直连' };
+      lastErr = '直连 HTTP ' + r.status; throw new Error('next');
+    }).catch(function (e) {
+      if (e && e.message === 'next') { /* fallthrough */ } else { lastErr = '直连失败(' + (e && e.message) + ')'; }
+      if (directCors) { throw new Error('直连失败（已勾选「直接跨域」）：' + lastErr + '。请确认浏览器已允许跨域，或取消勾选改用代理'); }
+      var list = [];
+      if (customProxy) list.push({ name: '自定义代理', make: function (u) { return customProxy.replace('{url}', encodeURIComponent(u)); } });
+      list.push({ name: 'AllOrigins', make: function (u) { return 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u); } });
+      list.push({ name: 'CodeTabs', make: function (u) { return 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(u); } });
+      var chain = Promise.reject();
+      list.forEach(function (p) {
+        chain = chain.catch(function () {
+          return tryFetch(p.make(url)).then(function (r) {
+            if (r.ok && !badPage(r.text)) return { text: r.text, ct: r.ct, via: p.name };
+            lastErr = p.name + ' HTTP ' + r.status; throw new Error('next');
+          });
+        });
+      });
+      return chain.catch(function () {
+        return tryFetch('https://r.jina.ai/' + url, 30000).then(function (r) {
+          if (r.ok && r.text && r.text.length > 30) return { text: r.text, ct: 'text/markdown', via: 'Jina Reader' };
+          lastErr = 'Jina HTTP ' + r.status; throw new Error('allfail');
+        });
+      }).catch(function () {
+        throw new Error('所有获取方式均失败：' + lastErr);
+      });
+    });
+  }
+
+  /* ---------------- 解析 ---------------- */
+  function isHtmlRes(res) {
+    return /html/i.test(res.ct) || /^\s*<(!doctype|html|head|body)/i.test(res.text) ||
+      res.text.indexOf('<html') >= 0 || res.text.indexOf('<body') >= 0;
+  }
+  function absolutizeDoc(doc, base) {
+    var A = function (u) { try { return new URL(u, base).href; } catch (e) { return u; } };
+    doc.querySelectorAll('[href]').forEach(function (n) { n.setAttribute('href', A(n.getAttribute('href'))); });
+    doc.querySelectorAll('[src]').forEach(function (n) { n.setAttribute('src', A(n.getAttribute('src'))); });
+    doc.querySelectorAll('[poster]').forEach(function (n) { n.setAttribute('poster', A(n.getAttribute('poster'))); });
+    doc.querySelectorAll('[srcset]').forEach(function (n) {
+      n.setAttribute('srcset', n.getAttribute('srcset').split(',').map(function (p) {
+        p = p.trim(); var i = p.indexOf(' '); return i < 0 ? A(p) : A(p.slice(0, i)) + p.slice(i);
+      }).join(', '));
+    });
+    doc.querySelectorAll('img').forEach(function (img) {
+      if (!img.getAttribute('src') || /^data:image\/gif/i.test(img.getAttribute('src') || '')) {
+        var lz = img.getAttribute('data-src') || img.getAttribute('data-original') || img.getAttribute('data-lazy-src') || img.getAttribute('data-actualsrc');
+        if (lz) img.setAttribute('src', A(lz));
+      }
+      img.setAttribute('referrerpolicy', 'no-referrer');
+      img.setAttribute('loading', 'lazy');
+    });
+  }
+  function parsePage(res, url) {
+    if (isHtmlRes(res)) {
+      var doc = new DOMParser().parseFromString(res.text, 'text/html');
+      var title = (doc.title || '').trim();
+      doc.querySelectorAll('script,style,link,noscript,template,svg,iframe').forEach(function (n) { n.remove(); });
+      doc.querySelectorAll('[style]').forEach(function (n) { n.removeAttribute('style'); });
+      absolutizeDoc(doc, url);
+      return { kind: 'html', doc: doc, title: title };
+    }
+    var title2 = '';
+    var mt = /^\s*Title:\s*(.+)$/m.exec(res.text);
+    if (mt) title2 = mt[1].trim();
+    return { kind: 'md', text: res.text, title: title2 };
+  }
+
+  /* ---------------- Markdown 渲染 ---------------- */
+  function safeUrl(u) {
+    u = String(u || '').trim();
+    if (/^\/\//.test(u)) return 'https:' + u;
+    if (/^https?:\/\//i.test(u)) return u;
+    return '#';
+  }
+  function inlineMd(text) {
+    var frag = document.createDocumentFragment();
+    var re = /(!\[([^\]]*)\]\(([^)\s]+)[^)]*\))|(\[([^\]]+)\]\(([^)\s]+)[^)]*\))|(\*\*([^*]+)\*\*)|(`([^`]+)`)/g;
+    var last = 0, m;
+    while ((m = re.exec(text))) {
+      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      if (m[1]) { var img = document.createElement('img'); img.src = safeUrl(m[3]); img.alt = m[2] || ''; img.loading = 'lazy'; frag.appendChild(img); }
+      else if (m[4]) { var a = document.createElement('a'); a.href = safeUrl(m[6]); a.textContent = m[5]; frag.appendChild(a); }
+      else if (m[7]) { var b = document.createElement('strong'); b.textContent = m[8]; frag.appendChild(b); }
+      else if (m[9]) { var c = document.createElement('code'); c.textContent = m[10]; frag.appendChild(c); }
+      last = re.lastIndex;
+    }
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+    return frag;
+  }
+  function mdToElement(md) {
+    var text = md;
+    var mi = text.indexOf('Markdown Content:');
+    if (mi >= 0) text = text.slice(mi + 'Markdown Content:'.length);
+    var root = el('div', 'reader');
+    var lines = text.replace(/\r/g, '').split('\n');
+    var i = 0;
+    while (i < lines.length) {
+      var line = lines[i];
+      if (/^\s*$/.test(line)) { i++; continue; }
+      var m = /^(#{1,6})\s+(.*)$/.exec(line);
+      if (m) { var h = el('h' + Math.min(m[1].length, 6)); h.appendChild(inlineMd(m[2])); root.appendChild(h); i++; continue; }
+      if (/^\s*([-*_])\1{2,}\s*$/.test(line)) { root.appendChild(el('hr')); i++; continue; }
+      if (/^\s*```/.test(line)) {
+        i++; var buf = [];
+        while (i < lines.length && !/^\s*```/.test(lines[i])) { buf.push(lines[i]); i++; }
+        i++; var pre = el('pre'); pre.appendChild(el('code', null, buf.join('\n'))); root.appendChild(pre); continue;
+      }
+      if (/^\s*[-*+]\s+/.test(line)) {
+        var ul = el('ul');
+        while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) { var li = el('li'); li.appendChild(inlineMd(lines[i].replace(/^\s*[-*+]\s+/, ''))); ul.appendChild(li); i++; }
+        root.appendChild(ul); continue;
+      }
+      if (/^\s*\d+\.\s+/.test(line)) {
+        var ol = el('ol');
+        while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) { var li2 = el('li'); li2.appendChild(inlineMd(lines[i].replace(/^\s*\d+\.\s+/, ''))); ol.appendChild(li2); i++; }
+        root.appendChild(ol); continue;
+      }
+      var buf2 = [line]; i++;
+      while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^#{1,6}\s/.test(lines[i]) && !/^\s*[-*+]\s+/.test(lines[i]) && !/^\s*\d+\.\s+/.test(lines[i]) && !/^\s*```/.test(lines[i])) { buf2.push(lines[i]); i++; }
+      var p = el('p'); p.appendChild(inlineMd(buf2.join(' '))); root.appendChild(p);
+    }
+    return root;
+  }
+
+  /* ---------------- 绘制 ---------------- */
+  /* ---------------- Ping 工具 ---------------- */
+  function pingTargetToUrl(v) {
+    v = String(v == null ? '' : v).trim();
+    if (!v) return '';
+    if (/^https?:\/\//i.test(v)) return v;
+    if (/^[\w.-]+(:\d+)?(\/.*)?$/.test(v)) return 'https://' + v;
+    return '';
+  }
+  function pingOnce(url) {
+    var ctrl = new AbortController();
+    var timer = setTimeout(function () { ctrl.abort(); }, 8000);
+    var t0 = performance.now();
+    return fetch(url, { mode: 'no-cors', cache: 'no-store', signal: ctrl.signal })
+      .then(function () { return performance.now() - t0; })
+      .catch(function () { return -1; })
+      .finally(function () { clearTimeout(timer); });
+  }
+  async function runPing(raw, out, btn) {
+    var url = pingTargetToUrl(raw);
+    out.textContent = '';
+    if (!url) { out.textContent = '请输入有效的域名或网址，例如 www.baidu.com'; return; }
+    btn.disabled = true;
+    out.textContent = '正在 Ping ' + hostOf(url) + ' …\n';
+    var times = [], ok = 0, total = 4;
+    for (var i = 1; i <= total; i++) {
+      var ms = await pingOnce(url);
+      if (ms >= 0) { ok++; times.push(ms); out.textContent += '第 ' + i + ' 次：' + ms.toFixed(0) + ' ms\n'; }
+      else { out.textContent += '第 ' + i + ' 次：超时/不可达\n'; }
+      if (i < total) await new Promise(function (r) { setTimeout(r, 300); });
+    }
+    if (times.length) {
+      var min = Math.min.apply(null, times), max = Math.max.apply(null, times);
+      var sum = times.reduce(function (a, b) { return a + b; }, 0);
+      out.textContent += '\n统计：发送 ' + total + '，成功 ' + ok + '，丢包 ' + Math.round((total - ok) / total * 100) + '%';
+      out.textContent += '\n延迟 min/avg/max = ' + min.toFixed(0) + '/' + (sum / times.length).toFixed(0) + '/' + max.toFixed(0) + ' ms';
+    } else {
+      out.textContent += '\n全部失败：目标不可达，或浏览器拦截了请求（混合内容/离线/隐私策略）。';
+    }
+    btn.disabled = false;
+  }
+  function drawHome() {
+    viewport.innerHTML = '';
+    var w = el('div', 'reader');
+    w.appendChild(el('h1', null, '🌐 Mini Browser'));
+    w.appendChild(el('p', 'muted', '在地址栏输入网址或搜索词。「网页」模式直接 iframe 嵌入；「阅读」模式通过直连/代理抓取后在本地渲染。'));
+    var g = el('div', 'home');
+    [['百度', 'https://www.baidu.com'], ['美师优课', 'https://www.msyk.cn'], ['哔哩哔哩', 'https://www.bilibili.com'], ['知乎', 'https://www.zhihu.com'], ['GitHub', 'https://github.com'], ['example.com', 'https://example.com']].forEach(function (it) {
+      var a = el('a', 'home-link', it[0]); a.href = it[1]; g.appendChild(a);
+    });
+    w.appendChild(g);
+    w.appendChild(el('h2', null, 'Ping 工具'));
+    var pr = el('div', 'ping-row');
+    var pin = document.createElement('input'); pin.className = 'ping-input'; pin.placeholder = '输入域名或网址，如 www.baidu.com';
+    var pb = el('button', 'pg-btn', 'Ping');
+    pr.appendChild(pin); pr.appendChild(pb);
+    w.appendChild(pr);
+    var pout = el('div', 'ping-out', '输入域名后点击 Ping');
+    w.appendChild(pout);
+    pb.addEventListener('click', function () { runPing(pin.value, pout, pb); });
+    pin.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); runPing(pin.value, pout, pb); } });
+    viewport.appendChild(w);
+    viewport.scrollTop = 0;
+  }
+  function drawReader(page) {
+    viewport.innerHTML = '';
+    var wrap;
+    if (page.kind === 'md') { wrap = mdToElement(page.text); }
+    else {
+      wrap = el('div', 'reader');
+      var b = page.doc.body;
+      if (b) { while (b.firstChild) wrap.appendChild(b.firstChild); }
+    }
+    if (!wrap) wrap = el('div', 'reader');
+    if (!wrap.classList.contains('reader')) wrap.classList.add('reader');
+    viewport.appendChild(wrap);
+    viewport.scrollTop = 0;
+  }
+  function drawWeb(url) {
+    viewport.innerHTML = '';
+    var f = document.createElement('iframe');
+    f.className = 'webview';
+    f.setAttribute('referrerpolicy', 'no-referrer');
+    f.src = url;
+    viewport.appendChild(f);
+  }
+  function drawError(url, msg) {
+    viewport.innerHTML = '';
+    var w = el('div', 'reader');
+    w.appendChild(el('h1', null, '⚠️ 无法加载页面'));
+    w.appendChild(el('p', 'muted', url));
+    w.appendChild(el('p', null, '原因：' + msg));
+    var ul = el('ul');
+    ['检查地址是否正确；', '「阅读」模式需要能访问 CORS 代理，可在右上角 ⚙ 设置自定义代理；', '尝试切换到「网页」模式（直接 iframe，无需代理，但站点可能禁止嵌入）；', '若网络受限，部分站点可能无法访问。'].forEach(function (t) { ul.appendChild(el('li', null, t)); });
+    w.appendChild(ul);
+    var btn = el('button', 'pg-btn', '切换 网页 / 阅读 模式');
+    btn.addEventListener('click', toggleMode);
+    w.appendChild(btn);
+    viewport.appendChild(w);
+    viewport.scrollTop = 0;
+  }
+
+  /* ---------------- 标签页 / 导航 ---------------- */
+  function renderTabs() {
+    var old = tabbar.querySelectorAll('.tab');
+    for (var i = 0; i < old.length; i++) old[i].remove();
+    tabs.forEach(function (t) {
+      var tab = el('div', 'tab' + (t.id === activeId ? ' active' : ''));
+      tab.appendChild(el('span', 'tab-title', t.title || '新标签页'));
+      var close = el('button', 'tab-close', '×'); close.title = '关闭';
+      close.addEventListener('click', function (e) { e.stopPropagation(); closeTab(t.id); });
+      tab.appendChild(close);
+      tab.addEventListener('click', function () { selectTab(t.id); });
+      tabbar.insertBefore(tab, newtabBtn);
+    });
+  }
+  function updateNav() {
+    var t = activeTab();
+    backBtn.disabled = !t || t.index <= 0;
+    fwdBtn.disabled = !t || t.index >= t.history.length - 1;
+  }
+  function finish(t) {
+    wintitle.textContent = (t.title || '') + ' — Mini Browser';
+    document.title = wintitle.textContent;
+    updateNav(); renderTabs();
+  }
+  function render(t) {
+    var url = t.history[t.index];
+    var token = ++navToken;
+    if (url === 'about:home') {
+      addrInput.value = ''; drawHome(); t.title = '新标签页'; viewport.classList.remove('loading'); setStatus('完成'); finish(t); return;
+    }
+    addrInput.value = url;
+    setStatus('正在加载…'); viewport.classList.add('loading');
+    if (mode === 'web') {
+      drawWeb(url); t.title = hostOf(url); viewport.classList.remove('loading'); finish(t);
+      setStatus('网页模式：若内容空白，多为站点禁止被 iframe 嵌入，请切到「阅读」');
+      return;
+    }
+    fetchText(url).then(function (res) {
+      if (token !== navToken) return;
+      var page = parsePage(res, url);
+      t.title = page.title || hostOf(url);
+      drawReader(page);
+      viewport.classList.remove('loading');
+      setStatus('完成 · 来源：' + res.via);
+      finish(t);
+    }).catch(function (e) {
+      if (token !== navToken) return;
+      t.title = '加载失败';
+      drawError(url, e && e.message ? e.message : String(e));
+      viewport.classList.remove('loading');
+      setStatus('加载失败');
+      finish(t);
+    });
+  }
+  function navigate(input) {
+    var t = activeTab();
+    if (!t) { createTab(input); return; }
+    var u = resolveUrl(input);
+    if (t.index < t.history.length - 1) t.history = t.history.slice(0, t.index + 1);
+    t.history.push(u); t.index = t.history.length - 1;
+    render(t);
+  }
+  function selectTab(id) { if (id === activeId) return; activeId = id; navToken++; render(activeTab()); }
+  function createTab(url) {
+    var t = { id: seq++, title: '新标签页', history: [resolveUrl(url || 'about:home')], index: 0 };
+    tabs.push(t); activeId = t.id; renderTabs(); render(t); return t;
+  }
+  function closeTab(id) {
+    var idx = -1;
+    for (var i = 0; i < tabs.length; i++) if (tabs[i].id === id) { idx = i; break; }
+    if (idx < 0) return;
+    tabs.splice(idx, 1);
+    if (tabs.length === 0) { createTab('about:home'); return; }
+    if (activeId === id) { activeId = tabs[Math.min(idx, tabs.length - 1)].id; navToken++; render(activeTab()); }
+    renderTabs();
+  }
+  function toggleMode() {
+    mode = mode === 'web' ? 'reader' : 'web';
+    localStorage.setItem('mb_mode', mode);
+    modeBtn.textContent = mode === 'web' ? '网页' : '阅读';
+    modeBtn.classList.toggle('reader', mode === 'reader');
+    statusRight.textContent = mode === 'web' ? '网页模式 · iframe' : ('阅读模式 · ' + (directCors ? '直连跨域' : '代理抓取'));
+    var t = activeTab(); if (t) render(t);
+  }
+
+  /* ---------------- 事件 ---------------- */
+  viewport.addEventListener('click', function (e) {
+    var a = e.target && e.target.closest ? e.target.closest('a') : null;
+    if (!a) return;
+    var href = a.getAttribute('href');
+    if (href && /^https?:\/\//i.test(href)) { e.preventDefault(); navigate(href); }
+    else if (href === '#' || (href && href.charAt(0) === '#')) { e.preventDefault(); }
+  });
+  newtabBtn.addEventListener('click', function () { createTab('about:home'); });
+  backBtn.addEventListener('click', function () { var t = activeTab(); if (t && t.index > 0) { t.index--; render(t); } });
+  fwdBtn.addEventListener('click', function () { var t = activeTab(); if (t && t.index < t.history.length - 1) { t.index++; render(t); } });
+  refreshBtn.addEventListener('click', function () { var t = activeTab(); if (t) render(t); });
+  homeBtn.addEventListener('click', function () { navigate('about:home'); });
+  goBtn.addEventListener('click', function () { navigate(addrInput.value); });
+  addrForm.addEventListener('submit', function (e) { e.preventDefault(); navigate(addrInput.value); addrInput.blur(); });
+  addrInput.addEventListener('focus', function () { addrInput.select(); });
+  modeBtn.addEventListener('click', toggleMode);
+  settingsBtn.addEventListener('click', function () { settings.hidden = !settings.hidden; if (!settings.hidden) { proxyInput.value = customProxy; directCorsEl.checked = directCors; } });
+  saveProxy.addEventListener('click', function () {
+    customProxy = proxyInput.value.trim();
+    localStorage.setItem('mb_proxy', customProxy);
+    setStatus(customProxy ? '已保存自定义代理' : '已清空自定义代理');
+  });
+  directCorsEl.addEventListener('change', function () {
+    directCors = directCorsEl.checked;
+    localStorage.setItem('mb_direct', directCors ? '1' : '0');
+    statusRight.textContent = mode === 'web' ? '网页模式 · iframe' : ('阅读模式 · ' + (directCors ? '直连跨域' : '代理抓取'));
+    setStatus(directCors ? '已开启「直接跨域」：阅读模式将只走直连' : '已关闭「直接跨域」：阅读模式使用代理');
+  });
+  document.addEventListener('keydown', function (e) {
+    var mod = e.ctrlKey || e.metaKey;
+    if (mod && (e.key === 't' || e.key === 'T')) { e.preventDefault(); createTab('about:home'); }
+    else if (mod && (e.key === 'r' || e.key === 'R')) { e.preventDefault(); var t = activeTab(); if (t) render(t); }
+    else if (mod && (e.key === 'l' || e.key === 'L')) { e.preventDefault(); addrInput.focus(); }
+  });
+
+  /* ---------------- 启动 ---------------- */
+  modeBtn.textContent = mode === 'web' ? '网页' : '阅读';
+  modeBtn.classList.toggle('reader', mode === 'reader');
+  statusRight.textContent = mode === 'web' ? '网页模式 · iframe' : ('阅读模式 · ' + (directCors ? '直连跨域' : '代理抓取'));
+  createTab('about:home');
+})();
+</script>
+</body>
+</html>
